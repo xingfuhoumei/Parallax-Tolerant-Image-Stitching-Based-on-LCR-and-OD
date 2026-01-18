@@ -8,3 +8,8 @@ __pycache__/
 venv/
 .idea/
 *.log
+data/
+outputs/
+logs/
+*.pth
+.DS_Store
