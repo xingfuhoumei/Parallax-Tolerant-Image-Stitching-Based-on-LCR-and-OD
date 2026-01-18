@@ -230,6 +230,21 @@ def get_true_points(img1, img2, src_pts_RT_8, dst_pts_RT_8, good_num_RT_8, score
 # 寻找视差区域的特征点
 def find_parallax_points(rejected_src_points,rejected_dst_points,src_real_H4,dst_real_H4,img1,img2,size_H4):
    # todo:把不接纳的点做第一次RANSAC
+    # 检查点数是否足够计算单应性矩阵
+    if len(rejected_src_points) < 4 or len(rejected_dst_points) < 4:
+        # 点数不足，直接返回原始内点
+        Hn, maskn = cv2.findHomography(src_real_H4, dst_real_H4, cv2.RANSAC, 2)
+        src_after_real_H4 = np.zeros(src_real_H4.shape)
+        for i in range(len(src_real_H4)):
+            src_after_real_H4[i][0] = Hn[0][0] * src_real_H4[i][0] + Hn[0][1] * src_real_H4[i][1] + Hn[0][2]
+            src_after_real_H4[i][1] = Hn[1][0] * src_real_H4[i][0] + Hn[1][1] * src_real_H4[i][1] + Hn[1][2]
+            den = Hn[2][0] * src_real_H4[i][0] + Hn[2][1] * src_real_H4[i][1] + Hn[2][2]
+            src_after_real_H4[i][0] = src_after_real_H4[i][0] / den
+            src_after_real_H4[i][1] = src_after_real_H4[i][1] / den
+        # 设置最终残差
+        all.final_residuals = get_adv_residual(src_after_real_H4, dst_real_H4)
+        return src_real_H4, dst_real_H4, src_after_real_H4, Hn, [], []
+
     Hr1, maskr = cv2.findHomography(rejected_src_points, rejected_dst_points, cv2.RANSAC, 4)
     matchesMask = maskr.ravel().tolist()
     src_pts_left_ = []
@@ -273,14 +288,18 @@ def find_parallax_points(rejected_src_points,rejected_dst_points,src_real_H4,dst
 
     # todo:进行特征点变换,src_pts_left:左图,拒绝点,变换后的特征点
     # 强制转换
-    src_pts_left_false = np.round(src_pts_left_false).astype(int)
-    src_pts_left = np.zeros(src_pts_left_false.shape)
-    for i in range(len(src_pts_left_false)):
-        src_pts_left[i][0] = Hn[0][0] * src_pts_left_false[i][0] + Hn[0][1] * src_pts_left_false[i][1] + Hn[0][2]
-        src_pts_left[i][1] = Hn[1][0] * src_pts_left_false[i][0] + Hn[1][1] * src_pts_left_false[i][1] + Hn[1][2]
-        den = Hn[2][0] * src_pts_left_false[i][0] + Hn[2][1] * src_pts_left_false[i][1] + Hn[2][2]
-        src_pts_left[i][0] = src_pts_left[i][0] / den
-        src_pts_left[i][1] = src_pts_left[i][1] / den
+    # 检查列表是否为空，避免空列表导致形状错误
+    if len(src_pts_left_false) > 0:
+        src_pts_left_false = np.round(src_pts_left_false).astype(int)
+        src_pts_left = np.zeros(src_pts_left_false.shape)
+        for i in range(len(src_pts_left_false)):
+            src_pts_left[i][0] = Hn[0][0] * src_pts_left_false[i][0] + Hn[0][1] * src_pts_left_false[i][1] + Hn[0][2]
+            src_pts_left[i][1] = Hn[1][0] * src_pts_left_false[i][0] + Hn[1][1] * src_pts_left_false[i][1] + Hn[1][2]
+            den = Hn[2][0] * src_pts_left_false[i][0] + Hn[2][1] * src_pts_left_false[i][1] + Hn[2][2]
+            src_pts_left[i][0] = src_pts_left[i][0] / den
+            src_pts_left[i][1] = src_pts_left[i][1] / den
+    else:
+        src_pts_left = np.array([])
 
     all.false_index_number = len(rejected_src_points) - len(accepted_src_points)
     all.real_index_number = len(accepted_src_points)
@@ -290,20 +309,29 @@ def find_parallax_points(rejected_src_points,rejected_dst_points,src_real_H4,dst
     src_pts_left_false = np.array(src_pts_left)
     # src_pts_left_false = np.array(src_pts_left_false)
     dst_pts_right_false = np.array(dst_pts_right_false)
-    Hr1, maskr1 = cv2.findHomography(src_pts_left_false, dst_pts_right_false, cv2.RANSAC, 1)
-    matchesMask1 = maskr1.ravel().tolist()
-    src_pts_left_parallax = []
-    dst_pts_right_parallax = []
-    src_pts_left_reject_parallax = []
-    dst_pts_right_reject_parallax = []
-    for i in range(src_pts_left_false.shape[0]):  # 把经过ransac的点筛出来
-        if matchesMask1[i] == 1:
-            src_pts_left_parallax.append(src_pts_left_false[i])
-            dst_pts_right_parallax.append(dst_pts_right_false[i])
-            # print(src_pts_left_false[i])
-        else:
-            src_pts_left_reject_parallax.append(src_pts_left_false[i])
-            dst_pts_right_reject_parallax.append(dst_pts_right_false[i])
+
+    # 检查点数是否足够（至少需要4个点才能计算单应性矩阵）
+    if len(src_pts_left_false) >= 4 and len(dst_pts_right_false) >= 4:
+        Hr1, maskr1 = cv2.findHomography(src_pts_left_false, dst_pts_right_false, cv2.RANSAC, 1)
+        matchesMask1 = maskr1.ravel().tolist()
+        src_pts_left_parallax = []
+        dst_pts_right_parallax = []
+        src_pts_left_reject_parallax = []
+        dst_pts_right_reject_parallax = []
+        for i in range(src_pts_left_false.shape[0]):  # 把经过ransac的点筛出来
+            if matchesMask1[i] == 1:
+                src_pts_left_parallax.append(src_pts_left_false[i])
+                dst_pts_right_parallax.append(dst_pts_right_false[i])
+                # print(src_pts_left_false[i])
+            else:
+                src_pts_left_reject_parallax.append(src_pts_left_false[i])
+                dst_pts_right_reject_parallax.append(dst_pts_right_false[i])
+    else:
+        # 点数不足，返回空的视差区域列表
+        src_pts_left_parallax = []
+        dst_pts_right_parallax = []
+        src_pts_left_reject_parallax = src_pts_left_false.tolist()
+        dst_pts_right_reject_parallax = dst_pts_right_false.tolist()
     # 变换后的图
     result_img2, t1, t2, warp_all = get_warp(img2, img1, Hn)
     # cv2.imshow("result_img2", result_img2)
@@ -357,32 +385,49 @@ def find_parallax_points(rejected_src_points,rejected_dst_points,src_real_H4,dst
 
     # cv2.waitKey()
    # todo:把不接纳的点做第一次RANSAC
-    Hr1, maskr = cv2.findHomography(rejected_src_points, rejected_dst_points, cv2.RANSAC, 4)
-    matchesMask = maskr.ravel().tolist()
-    src_pts_left_ = []
-    dst_pts_right_ = []
-    src_pts_left_false = []
-    dst_pts_right_false = []
-    # 把经过ransac的点筛出来
-    for i in range(rejected_src_points.shape[0]):
-        if matchesMask[i] == 1:
-            src_pts_left_.append(rejected_src_points[i])
-            dst_pts_right_.append(rejected_dst_points[i])
-        # 剔除的点都是图像的下半部分
-        if matchesMask[i] == 0 and rejected_src_points[i][1] > 1 / 2 * img1.shape[0]:
-            src_pts_left_false.append(rejected_src_points[i])
-            dst_pts_right_false.append(rejected_dst_points[i])
-    # Function:把RANSAC接受的点加入回原本的内点集,并计算新的H矩阵
-    accepted_src_points = np.concatenate((src_real_H4, src_pts_left_))
-    accepted_dst_points = np.concatenate((dst_real_H4, dst_pts_right_))
-    Hn, maskn = cv2.findHomography(accepted_src_points, accepted_dst_points, cv2.RANSAC, 2)
-    all.true_points_counts = len(accepted_src_points)
-    all.final_residuals = get_adv_residual(accepted_src_points,accepted_dst_points)
-
-
+    # 检查点数是否足够计算单应性矩阵
+    if len(rejected_src_points) < 4 or len(rejected_dst_points) < 4:
+        # 点数不足，使用现有内点直接计算单应性矩阵
+        Hn, maskn = cv2.findHomography(src_real_H4, dst_real_H4, cv2.RANSAC, 2)
+        src_after_real_H4 = np.zeros(src_real_H4.shape)
+        for i in range(len(src_real_H4)):
+            src_after_real_H4[i][0] = Hn[0][0] * src_real_H4[i][0] + Hn[0][1] * src_real_H4[i][1] + Hn[0][2]
+            src_after_real_H4[i][1] = Hn[1][0] * src_real_H4[i][0] + Hn[1][1] * src_real_H4[i][1] + Hn[1][2]
+            den = Hn[2][0] * src_real_H4[i][0] + Hn[2][1] * src_real_H4[i][1] + Hn[2][2]
+            src_after_real_H4[i][0] = src_after_real_H4[i][0] / den
+            src_after_real_H4[i][1] = src_after_real_H4[i][1] / den
+        accepted_src_points = src_real_H4
+        accepted_dst_points = dst_real_H4
+        all.true_points_counts = len(accepted_src_points)
+        all.final_residuals = get_adv_residual(accepted_src_points, accepted_dst_points)
+        # 初始化空列表，避免后续代码出错
+        src_pts_left_false = []
+        dst_pts_right_false = []
+    else:
+        Hr1, maskr = cv2.findHomography(rejected_src_points, rejected_dst_points, cv2.RANSAC, 4)
+        matchesMask = maskr.ravel().tolist()
+        src_pts_left_ = []
+        dst_pts_right_ = []
+        src_pts_left_false = []
+        dst_pts_right_false = []
+        # 把经过ransac的点筛出来
+        for i in range(rejected_src_points.shape[0]):
+            if matchesMask[i] == 1:
+                src_pts_left_.append(rejected_src_points[i])
+                dst_pts_right_.append(rejected_dst_points[i])
+            # 剔除的点都是图像的下半部分
+            if matchesMask[i] == 0 and rejected_src_points[i][1] > 1 / 2 * img1.shape[0]:
+                src_pts_left_false.append(rejected_src_points[i])
+                dst_pts_right_false.append(rejected_dst_points[i])
+        # Function:把RANSAC接受的点加入回原本的内点集,并计算新的H矩阵
+        accepted_src_points = np.concatenate((src_real_H4, src_pts_left_))
+        accepted_dst_points = np.concatenate((dst_real_H4, dst_pts_right_))
+        Hn, maskn = cv2.findHomography(accepted_src_points, accepted_dst_points, cv2.RANSAC, 2)
+        all.true_points_counts = len(accepted_src_points)
+        all.final_residuals = get_adv_residual(accepted_src_points,accepted_dst_points)
 
    # todo:进行正确点特征点变换
-   # 强制转换
+    # 强制转换
     # src_pts_left_false = np.round(src_pts_left_false).astype(int)
     src_after_real_H4 = np.zeros(accepted_src_points.shape)
     for i in range(len(accepted_src_points)):
@@ -396,33 +441,46 @@ def find_parallax_points(rejected_src_points,rejected_dst_points,src_real_H4,dst
 
     # todo:进行特征点变换,src_pts_left:左图,拒绝点,变换后的特征点
     # 强制转换
-    src_pts_left_false = np.round(src_pts_left_false).astype(int)
-    src_pts_left = np.zeros(src_pts_left_false.shape)
-    for i in range(len(src_pts_left_false)):
-        src_pts_left[i][0] = Hn[0][0] * src_pts_left_false[i][0] + Hn[0][1] * src_pts_left_false[i][1] + Hn[0][2]
-        src_pts_left[i][1] = Hn[1][0] * src_pts_left_false[i][0] + Hn[1][1] * src_pts_left_false[i][1] + Hn[1][2]
-        den = Hn[2][0] * src_pts_left_false[i][0] + Hn[2][1] * src_pts_left_false[i][1] + Hn[2][2]
-        src_pts_left[i][0] = src_pts_left[i][0] / den
-        src_pts_left[i][1] = src_pts_left[i][1] / den
+    # 检查列表是否为空，避免空列表导致形状错误
+    if len(src_pts_left_false) > 0:
+        src_pts_left_false = np.round(src_pts_left_false).astype(int)
+        src_pts_left = np.zeros(src_pts_left_false.shape)
+        for i in range(len(src_pts_left_false)):
+            src_pts_left[i][0] = Hn[0][0] * src_pts_left_false[i][0] + Hn[0][1] * src_pts_left_false[i][1] + Hn[0][2]
+            src_pts_left[i][1] = Hn[1][0] * src_pts_left_false[i][0] + Hn[1][1] * src_pts_left_false[i][1] + Hn[1][2]
+            den = Hn[2][0] * src_pts_left_false[i][0] + Hn[2][1] * src_pts_left_false[i][1] + Hn[2][2]
+            src_pts_left[i][0] = src_pts_left[i][0] / den
+            src_pts_left[i][1] = src_pts_left[i][1] / den
+    else:
+        src_pts_left = np.array([])
 
     # todo:第二次RANSAC 变换后的不要的点
     src_pts_left_false = np.array(src_pts_left)
     # src_pts_left_false = np.array(src_pts_left_false)
     dst_pts_right_false = np.array(dst_pts_right_false)
-    Hr1, maskr1 = cv2.findHomography(src_pts_left_false, dst_pts_right_false, cv2.RANSAC, 1)
-    matchesMask1 = maskr1.ravel().tolist()
-    src_pts_left_parallax = []
-    dst_pts_right_parallax = []
-    src_pts_left_reject_parallax = []
-    dst_pts_right_reject_parallax = []
-    for i in range(src_pts_left_false.shape[0]):  # 把经过ransac的点筛出来
-        if matchesMask1[i] == 1:
-            src_pts_left_parallax.append(src_pts_left_false[i])
-            dst_pts_right_parallax.append(dst_pts_right_false[i])
-            # print(src_pts_left_false[i])
-        else:
-            src_pts_left_reject_parallax.append(src_pts_left_false[i])
-            dst_pts_right_reject_parallax.append(dst_pts_right_false[i])
+
+    # 检查点数是否足够（至少需要4个点才能计算单应性矩阵）
+    if len(src_pts_left_false) >= 4 and len(dst_pts_right_false) >= 4:
+        Hr1, maskr1 = cv2.findHomography(src_pts_left_false, dst_pts_right_false, cv2.RANSAC, 1)
+        matchesMask1 = maskr1.ravel().tolist()
+        src_pts_left_parallax = []
+        dst_pts_right_parallax = []
+        src_pts_left_reject_parallax = []
+        dst_pts_right_reject_parallax = []
+        for i in range(src_pts_left_false.shape[0]):  # 把经过ransac的点筛出来
+            if matchesMask1[i] == 1:
+                src_pts_left_parallax.append(src_pts_left_false[i])
+                dst_pts_right_parallax.append(dst_pts_right_false[i])
+                # print(src_pts_left_false[i])
+            else:
+                src_pts_left_reject_parallax.append(src_pts_left_false[i])
+                dst_pts_right_reject_parallax.append(dst_pts_right_false[i])
+    else:
+        # 点数不足，返回空的视差区域列表
+        src_pts_left_parallax = []
+        dst_pts_right_parallax = []
+        src_pts_left_reject_parallax = src_pts_left_false.tolist()
+        dst_pts_right_reject_parallax = dst_pts_right_false.tolist()
     # 变换后的图
     result_img2, t1, t2, warp_all = get_warp(img2, img1, Hn)
     # cv2.imshow("result_img2", result_img2)
